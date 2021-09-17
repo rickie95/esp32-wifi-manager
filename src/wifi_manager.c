@@ -145,14 +145,11 @@ const int WIFI_MANAGER_REQUEST_DISCONNECT_BIT = BIT8;
 
 void wifi_manager_timer_retry_cb( TimerHandle_t xTimer ){
 
-	ESP_LOGI(TAG, "Retry Timer Tick! Sending ORDER_CONNECT_STA with reason CONNECTION_REQUEST_AUTO_RECONNECT");
-
 	/* stop the timer */
 	xTimerStop( xTimer, (TickType_t) 0 );
 
 	/* Attempt to reconnect */
 	wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_AUTO_RECONNECT);
-
 }
 
 void wifi_manager_timer_shutdown_ap_cb( TimerHandle_t xTimer){
@@ -604,6 +601,8 @@ static void wifi_manager_event_handler(void* arg, esp_event_base_t event_base, i
 		 * the application is LwIP-based, then you need to wait until the got ip event comes in. */
 		case WIFI_EVENT_STA_CONNECTED:
 			ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED");
+			/* create timer for to keep track of retries */
+			wifi_manager_retry_timer = xTimerCreate( NULL, pdMS_TO_TICKS(WIFI_MANAGER_RETRY_TIMER), pdFALSE, ( void * ) 0, wifi_manager_timer_retry_cb);
 			break;
 
 		/* This event can be generated in the following scenarios:
@@ -1179,7 +1178,9 @@ void wifi_manager( void * pvParameters ){
 					}
 
 					/* Start the timer that will try to restore the saved config */
-					xTimerStart( wifi_manager_retry_timer, (TickType_t)0 );
+					if(wifi_manager_retry_timer != NULL){
+						xTimerStart( wifi_manager_retry_timer, (TickType_t)0 );
+					}
 
 					/* if it was a restore attempt connection, we clear the bit */
 					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_RESTORE_STA_BIT);
@@ -1195,7 +1196,12 @@ void wifi_manager( void * pvParameters ){
 						else{
 							/* In this scenario the connection was lost beyond repair: kick start the AP! */
 							retries = 0;
-
+							ESP_LOGI(TAG, "DELETING TIMER");
+							if(xTimerDelete(wifi_manager_retry_timer, (TickType_t)0) == pdTRUE){
+								ESP_LOGI(TAG, "TIMER DELETED");
+							} else{
+								ESP_LOGW(TAG, "CANNOT DELETE RECONNECT TIMER");
+							}
 							/* start SoftAP */
 							wifi_manager_send_message(WM_ORDER_START_AP, NULL);
 						}
