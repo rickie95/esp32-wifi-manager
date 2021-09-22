@@ -149,12 +149,7 @@ const int WIFI_MANAGER_REQUEST_DISCONNECT_BIT = BIT8;
 /* @brief NVS key for WiFi configuration (SSID, pswd) list */
 const char* SAVED_NETWORKS = "saved_networks";
 
-static int current_config_index = -1;
-
-int next_config_index(){
-	current_config_index = (current_config_index + 1) % 10;
-	return current_config_index;
-}
+static int current_config_index = 0;
 
 void wifi_manager_timer_retry_cb( TimerHandle_t xTimer ){
 
@@ -368,13 +363,16 @@ bool wifi_manager_fetch_wifi_sta_config(){
 
 		// Try to load a configuration in saved_networks[current_config_index]
 		// if config is null => load next
-
-		for(int i = 0; i < MAX_SAVED_NETWORK_CONFIGS; i++){
-			current_config_index = (current_config_index + i + 1) % MAX_SAVED_NETWORK_CONFIGS;
-			if(saved_networks[current_config_index].ap_ssid != 0){
-				strcpy((char*)(wifi_manager_config_sta->sta.ssid), (char *)(saved_networks[current_config_index].ap_ssid));
-				strcpy((char*)(wifi_manager_config_sta->sta.password), (char *)(saved_networks[current_config_index].ap_pwd));
+		int network_config_iterator;
+		for(int i = 1; i < MAX_SAVED_NETWORK_CONFIGS; i++){
+			network_config_iterator = (current_config_index + i) % MAX_SAVED_NETWORK_CONFIGS;
+			ESP_LOGI(TAG, "configuration slot # %d [ssid: %s pswd: %s]", network_config_iterator, saved_networks[network_config_iterator].ap_ssid, saved_networks[network_config_iterator].ap_pwd);
+			
+			if(saved_networks[network_config_iterator].ap_ssid[0] != '\0'){
+				strcpy((char*)(wifi_manager_config_sta->sta.ssid), (char *)(saved_networks[network_config_iterator].ap_ssid));
+				strcpy((char*)(wifi_manager_config_sta->sta.password), (char *)(saved_networks[network_config_iterator].ap_pwd));
 				ESP_LOGI(TAG, "FOUND CONFIGURATION IN SAVED_NETWORKS SSID:%s PSWD:%s", wifi_manager_config_sta->sta.ssid, wifi_manager_config_sta->sta.password);
+				current_config_index = network_config_iterator;
 				break;
 			}
 		}
@@ -412,8 +410,6 @@ bool wifi_manager_fetch_wifi_sta_config(){
 		ESP_LOGD(TAG, "wifi_manager_fetch_wifi_settings: sta_static_ip (0 = dhcp client, 1 = static ip):%i",wifi_settings.sta_static_ip);
 
 		return wifi_manager_config_sta->sta.ssid[0] != '\0';
-
-
 	}
 	else{
 		return false;
@@ -425,7 +421,6 @@ bool wifi_manager_fetch_wifi_sta_config(){
 void wifi_manager_clear_ip_info_json(){
 	strcpy(ip_info_json, "{}\n");
 }
-
 
 void wifi_manager_generate_ip_info_json(update_reason_code_t update_reason_code){
 
@@ -478,7 +473,6 @@ void wifi_manager_generate_ip_info_json(update_reason_code_t update_reason_code)
 
 }
 
-
 void wifi_manager_clear_access_points_json(){
 	strcpy(accessp_json, "[]\n");
 }
@@ -511,8 +505,6 @@ void wifi_manager_generate_acess_points_json(){
 	}
 
 }
-
-
 
 bool wifi_manager_lock_sta_ip_string(TickType_t xTicksToWait){
 	if(wifi_manager_sta_ip_mutex){
@@ -553,7 +545,6 @@ void wifi_manager_safe_update_sta_ip_string(uint32_t ip){
 char* wifi_manager_get_sta_ip_string(){
 	return wifi_manager_sta_ip;
 }
-
 
 bool wifi_manager_lock_json_buffer(TickType_t xTicksToWait){
 	if(wifi_manager_json_mutex){
@@ -1244,8 +1235,15 @@ void wifi_manager( void * pvParameters ){
 							retries = 0;
 							ESP_LOGI(TAG, "Retries espleted, fetching new config and starting AP.");
 							/* try another saved network. Meanwhile start SoftAP */
-							wifi_manager_fetch_wifi_sta_config();
-							wifi_manager_send_message(WM_ORDER_START_AP, NULL);
+							if(wifi_manager_fetch_wifi_sta_config()){
+								ESP_LOGI(TAG, "Alternative wifi found. Will attempt to connect.");
+								wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_RESTORE_CONNECTION);
+							}
+							else{
+								/* no wifi saved: start soft AP! This is what should happen during a first run */
+								ESP_LOGI(TAG, "No alternative wifi found. Starting access point.");
+								wifi_manager_send_message(WM_ORDER_START_AP, NULL);
+							}
 						}
 					}
 				}
