@@ -102,7 +102,7 @@ extern "C" {
 #define DEFAULT_AP_SSID_HIDDEN 				0
 
 /** @brief Defines access point's name. Default value: esp32. Run 'make menuconfig' to setup your own value or replace here by a string */
-#define DEFAULT_AP_SSID 					CONFIG_DEFAULT_AP_SSID
+#define DEFAULT_AP_SSID 					"FASEP-AP" //CONFIG_DEFAULT_AP_SSID
 
 /** @brief Defines access point's password.
  *	@warning In the case of an open access point, the password must be a null string "" or "\0" if you want to be verbose but waste one byte.
@@ -111,7 +111,7 @@ extern "C" {
 #define DEFAULT_AP_PASSWORD 				CONFIG_DEFAULT_AP_PASSWORD
 
 /** @brief Defines the hostname broadcasted by mDNS */
-#define DEFAULT_HOSTNAME					"esp32"
+#define DEFAULT_HOSTNAME					"FASEP-AP"
 
 /** @brief Defines access point's bandwidth.
  *  Value: WIFI_BW_HT20 for 20 MHz  or  WIFI_BW_HT40 for 40 MHz
@@ -150,7 +150,7 @@ extern "C" {
  *  Value: 1 will turn off own AP when connected to another AP (STA only mode when connected)
  *  Turning off own AP when connected to another AP minimize channel interference and increase throughput
  */
-#define DEFAULT_STA_ONLY 					1
+#define DEFAULT_STA_ONLY 					0
 
 /** @brief Defines if wifi power save shall be enabled.
  *  Value: WIFI_PS_NONE for full power (wifi modem always on)
@@ -191,6 +191,10 @@ extern "C" {
  */
 #define WPA2_MINIMUM_PASSWORD_LENGTH		8
 
+/**
+ * @brief defines max num of saved networks (ssid, pswd) on storage.
+ */
+#define MAX_SAVED_NETWORK_CONFIGS 10
 
 /**
  * @brief Defines the complete list of all messages that the wifi_manager can process.

@@ -111,6 +111,11 @@ struct wifi_settings_t wifi_settings = {
 	.sta_static_ip = 0,
 };
 
+typedef struct{
+	uint8_t ap_ssid[MAX_SSID_SIZE];
+	uint8_t ap_pwd[MAX_PASSWORD_SIZE];
+}network_info; 
+
 const char wifi_manager_nvs_namespace[] = "espwifimgr";
 
 static EventGroupHandle_t wifi_manager_event_group;
@@ -141,7 +146,15 @@ const int WIFI_MANAGER_SCAN_BIT = BIT7;
 /* @brief When set, means user requested for a disconnect */
 const int WIFI_MANAGER_REQUEST_DISCONNECT_BIT = BIT8;
 
+/* @brief NVS key for WiFi configuration (SSID, pswd) list */
+const char* SAVED_NETWORKS = "saved_networks";
 
+static int current_config_index = -1;
+
+int next_config_index(){
+	current_config_index = (current_config_index + 1) % 10;
+	return current_config_index;
+}
 
 void wifi_manager_timer_retry_cb( TimerHandle_t xTimer ){
 
@@ -232,32 +245,47 @@ esp_err_t wifi_manager_save_sta_config(){
 			return esp_err;
 		}
 
-		sz = sizeof(tmp_conf.sta.ssid);
-		esp_err = nvs_get_blob(handle, "ssid", tmp_conf.sta.ssid, &sz);
-		if( (esp_err == ESP_OK  || esp_err == ESP_ERR_NVS_NOT_FOUND) && strcmp( (char*)tmp_conf.sta.ssid, (char*)wifi_manager_config_sta->sta.ssid) != 0){
-			/* different ssid or ssid does not exist in flash: save new ssid */
-			esp_err = nvs_set_blob(handle, "ssid", wifi_manager_config_sta->sta.ssid, 32);
-			if (esp_err != ESP_OK){
-				nvs_sync_unlock();
-				return esp_err;
-			}
-			change = true;
-			ESP_LOGI(TAG, "wifi_manager_wrote wifi_sta_config: ssid:%s",wifi_manager_config_sta->sta.ssid);
-
+		sz = sizeof(network_info) * 10;
+		network_info *saved_networks = (network_info*) malloc(sz);
+		memset(saved_networks, 0, sz);
+		esp_err = nvs_get_blob(handle, SAVED_NETWORKS, saved_networks, &sz);
+		bool wrote = false;
+		if(esp_err != ESP_OK && esp_err != ESP_ERR_NVS_NOT_FOUND){
+			ESP_LOGE(TAG, "ERROR SAVING NETWORK CONFIGURATION [ERR CODE: %04X]", esp_err);
+			free(saved_networks);
+			nvs_sync_unlock();
+			return esp_err;
 		}
-
-		sz = sizeof(tmp_conf.sta.password);
-		esp_err = nvs_get_blob(handle, "password", tmp_conf.sta.password, &sz);
-		if( (esp_err == ESP_OK  || esp_err == ESP_ERR_NVS_NOT_FOUND) && strcmp( (char*)tmp_conf.sta.password, (char*)wifi_manager_config_sta->sta.password) != 0){
-			/* different password or password does not exist in flash: save new password */
-			esp_err = nvs_set_blob(handle, "password", wifi_manager_config_sta->sta.password, 64);
-			if (esp_err != ESP_OK){
-				nvs_sync_unlock();
-				return esp_err;
+		// iterate over saved networks array and check if we need to add a new (ssid, password) or update and existing one.
+		for(int i = 0; i < MAX_SAVED_NETWORK_CONFIGS; i++){
+			// write to array if found a saved config with same SSID or an empty slot
+			if(	(strcmp((char *)(saved_networks[i].ap_ssid), (char *)wifi_manager_config_sta->sta.ssid) == 0) ||
+				saved_networks[i].ap_ssid == 0 ){
+				strcpy((char *)(saved_networks[i].ap_ssid), (char*)(wifi_manager_config_sta->sta.ssid));
+				strcpy((char *)(saved_networks[i].ap_pwd), (char *)(wifi_manager_config_sta->sta.password));
+				ESP_LOGI(TAG, "Updated config [%s] [%s]", (char *)(saved_networks[0].ap_ssid), (char *)(saved_networks[0].ap_pwd));
+				wrote = true;
+				break;
 			}
-			change = true;
-			ESP_LOGI(TAG, "wifi_manager_wrote wifi_sta_config: password:%s",wifi_manager_config_sta->sta.password);
 		}
+		// 3) saved_networks doesn't contains a conf with current SSID -> add new conf to saved_networks.
+		if(!wrote){
+			// shift the array, write new conf on first pos
+			memmove(saved_networks + 1, saved_networks, sizeof(network_info) * 10);
+			strcpy((char *)(saved_networks[0].ap_ssid), (char*)(wifi_manager_config_sta->sta.ssid));
+			strcpy((char*)(saved_networks[0].ap_pwd), (char*)(wifi_manager_config_sta->sta.password));
+			ESP_LOGI(TAG, "Saved new config [%s] [%s]", (char *)(saved_networks[0].ap_ssid), (char *)(saved_networks[0].ap_pwd));
+			wrote = true;
+		}
+		// write changes on storage
+		esp_err = nvs_set_blob(handle, SAVED_NETWORKS, saved_networks, sz);
+		free(saved_networks);
+		if(esp_err != ESP_OK){
+			nvs_sync_unlock();
+			return esp_err;
+		}
+		change = true;
+		ESP_LOGD(TAG, "wrote saved_networks to NVS");
 
 		sz = sizeof(tmp_settings);
 		esp_err = nvs_get_blob(handle, "settings", &tmp_settings, &sz);
@@ -309,7 +337,8 @@ esp_err_t wifi_manager_save_sta_config(){
 }
 
 bool wifi_manager_fetch_wifi_sta_config(){
-
+	// Potrebbe convenire rinominare la funzione.
+	// FIXME: carica la configurazione, iterando di volta in volta lungo l'array.
 	nvs_handle handle;
 	esp_err_t esp_err;
 	if(nvs_sync_lock( portMAX_DELAY )){
@@ -322,34 +351,40 @@ bool wifi_manager_fetch_wifi_sta_config(){
 		}
 
 		if(wifi_manager_config_sta == NULL){
-			wifi_manager_config_sta = (wifi_config_t*)malloc(sizeof(wifi_config_t));
+			wifi_manager_config_sta = (wifi_config_t*) malloc(sizeof(wifi_config_t));
 		}
-		memset(wifi_manager_config_sta, 0x00, sizeof(wifi_config_t));
+		memset(wifi_manager_config_sta, 0, sizeof(wifi_config_t));
 
+		size_t sz =sizeof(network_info) * 10;
+		network_info *saved_networks = (network_info*) malloc(sizeof(network_info)*10);
+		memset(saved_networks, 0, sz);
+		esp_err = nvs_get_blob(handle, SAVED_NETWORKS, saved_networks, &sz);
+		if(esp_err != ESP_OK){
+			free(saved_networks);
+			ESP_LOGW(TAG, "ERROR OCCURRED WHILE READING SAVED_NETWORKS");
+			nvs_sync_unlock();
+			return false;
+		}
+
+		// Try to load a configuration in saved_networks[current_config_index]
+		// if config is null => load next
+
+		for(int i = 0; i < MAX_SAVED_NETWORK_CONFIGS; i++){
+			current_config_index = (current_config_index + i + 1) % MAX_SAVED_NETWORK_CONFIGS;
+			if(saved_networks[current_config_index].ap_ssid != 0){
+				strcpy((char*)(wifi_manager_config_sta->sta.ssid), (char *)(saved_networks[current_config_index].ap_ssid));
+				strcpy((char*)(wifi_manager_config_sta->sta.password), (char *)(saved_networks[current_config_index].ap_pwd));
+				ESP_LOGI(TAG, "FOUND CONFIGURATION IN SAVED_NETWORKS SSID:%s PSWD:%s", wifi_manager_config_sta->sta.ssid, wifi_manager_config_sta->sta.password);
+				break;
+			}
+		}
+		free(saved_networks);
+		
 		/* allocate buffer */
-		size_t sz = sizeof(wifi_settings);
+		sz = sizeof(wifi_settings);
 		uint8_t *buff = (uint8_t*)malloc(sizeof(uint8_t) * sz);
 		memset(buff, 0x00, sizeof(sz));
-
-		/* ssid */
-		sz = sizeof(wifi_manager_config_sta->sta.ssid);
-		esp_err = nvs_get_blob(handle, "ssid", buff, &sz);
-		if(esp_err != ESP_OK){
-			free(buff);
-			nvs_sync_unlock();
-			return false;
-		}
-		memcpy(wifi_manager_config_sta->sta.ssid, buff, sz);
-
-		/* password */
-		sz = sizeof(wifi_manager_config_sta->sta.password);
-		esp_err = nvs_get_blob(handle, "password", buff, &sz);
-		if(esp_err != ESP_OK){
-			free(buff);
-			nvs_sync_unlock();
-			return false;
-		}
-		memcpy(wifi_manager_config_sta->sta.password, buff, sz);
+		
 
 		/* settings */
 		sz = sizeof(wifi_settings);
@@ -601,8 +636,17 @@ static void wifi_manager_event_handler(void* arg, esp_event_base_t event_base, i
 		 * the application is LwIP-based, then you need to wait until the got ip event comes in. */
 		case WIFI_EVENT_STA_CONNECTED:
 			ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED");
+			/** an addendum: this event arises when
+			 * 1) connecting to a fresh new connection
+			 * 2) reconnecting after losing signal
+			 * 3) connecting to a different AP while searching for a previous AP
+			**/
+
 			/* create timer for to keep track of retries */
-			wifi_manager_retry_timer = xTimerCreate( NULL, pdMS_TO_TICKS(WIFI_MANAGER_RETRY_TIMER), pdFALSE, ( void * ) 0, wifi_manager_timer_retry_cb);
+
+			if(wifi_manager_retry_timer == NULL) 
+				wifi_manager_retry_timer = xTimerCreate( NULL, pdMS_TO_TICKS(WIFI_MANAGER_RETRY_TIMER), pdFALSE, ( void * ) 0, wifi_manager_timer_retry_cb);
+
 			break;
 
 		/* This event can be generated in the following scenarios:
@@ -893,6 +937,7 @@ void wifi_manager( void * pvParameters ){
 	queue_message msg;
 	BaseType_t xStatus;
 	EventBits_t uxBits;
+	ESP_LOGI(TAG, "Setting retries =0");
 	uint8_t	retries = 0;
 
 
@@ -1195,14 +1240,11 @@ void wifi_manager( void * pvParameters ){
 						}
 						else{
 							/* In this scenario the connection was lost beyond repair: kick start the AP! */
+							
 							retries = 0;
-							ESP_LOGI(TAG, "DELETING TIMER");
-							if(xTimerDelete(wifi_manager_retry_timer, (TickType_t)0) == pdTRUE){
-								ESP_LOGI(TAG, "TIMER DELETED");
-							} else{
-								ESP_LOGW(TAG, "CANNOT DELETE RECONNECT TIMER");
-							}
-							/* start SoftAP */
+							ESP_LOGI(TAG, "Retries espleted, fetching new config and starting AP.");
+							/* try another saved network. Meanwhile start SoftAP */
+							wifi_manager_fetch_wifi_sta_config();
 							wifi_manager_send_message(WM_ORDER_START_AP, NULL);
 						}
 					}
@@ -1233,7 +1275,6 @@ void wifi_manager( void * pvParameters ){
 
 			case WM_ORDER_STOP_AP:
 				ESP_LOGI(TAG, "MESSAGE: ORDER_STOP_AP");
-
 
 				uxBits = xEventGroupGetBits(wifi_manager_event_group);
 
@@ -1278,6 +1319,7 @@ void wifi_manager( void * pvParameters ){
 				}
 
 				/* reset number of retries */
+				ESP_LOGI(TAG, "Resetting retries");
 				retries = 0;
 
 				/* refresh JSON with the new IP */
@@ -1338,5 +1380,3 @@ void wifi_manager( void * pvParameters ){
 	vTaskDelete( NULL );
 
 }
-
-
