@@ -111,11 +111,6 @@ struct wifi_settings_t wifi_settings = {
 	.sta_static_ip = 0,
 };
 
-typedef struct{
-	uint8_t ap_ssid[MAX_SSID_SIZE];
-	uint8_t ap_pwd[MAX_PASSWORD_SIZE];
-}network_info; 
-
 const char wifi_manager_nvs_namespace[] = "espwifimgr";
 
 static EventGroupHandle_t wifi_manager_event_group;
@@ -149,7 +144,7 @@ const int WIFI_MANAGER_REQUEST_DISCONNECT_BIT = BIT8;
 /* @brief NVS key for WiFi configuration (SSID, pswd) list */
 const char* SAVED_NETWORKS = "saved_networks";
 
-static int current_config_index = 0;
+static int current_config_index = -1;
 
 void wifi_manager_timer_retry_cb( TimerHandle_t xTimer ){
 
@@ -240,7 +235,7 @@ esp_err_t wifi_manager_save_sta_config(){
 			return esp_err;
 		}
 
-		sz = sizeof(network_info) * 10;
+		sz = sizeof(network_info) * MAX_SAVED_NETWORK_CONFIGS;
 		network_info *saved_networks = (network_info*) malloc(sz);
 		memset(saved_networks, 0, sz);
 		esp_err = nvs_get_blob(handle, SAVED_NETWORKS, saved_networks, &sz);
@@ -251,28 +246,33 @@ esp_err_t wifi_manager_save_sta_config(){
 			nvs_sync_unlock();
 			return esp_err;
 		}
-		// iterate over saved networks array and check if we need to add a new (ssid, password) or update and existing one.
+
+		// Iterate over saved networks array and check if we need to add a new (ssid, password) or update an existing one.
+		// Two cases can occur:
+		// 1) Current configuration is an update of an existing one => ovewrite it
+		// 2) Current configuration is new: shift all configs right (LAST CONFIG WILL BE DISCARDED) and save the new one 
+		//	   in first position
 		for(int i = 0; i < MAX_SAVED_NETWORK_CONFIGS; i++){
-			// write to array if found a saved config with same SSID or an empty slot
-			if(	(strcmp((char *)(saved_networks[i].ap_ssid), (char *)wifi_manager_config_sta->sta.ssid) == 0) ||
-				saved_networks[i].ap_ssid == 0 ){
-				strcpy((char *)(saved_networks[i].ap_ssid), (char*)(wifi_manager_config_sta->sta.ssid));
+			// Cases 1, check if the SSID is the same
+			if(strcmp((char *)(saved_networks[i].ap_ssid), (char *)wifi_manager_config_sta->sta.ssid) == 0){
+				strcpy((char *)(saved_networks[i].ap_ssid), (char *)(wifi_manager_config_sta->sta.ssid));
 				strcpy((char *)(saved_networks[i].ap_pwd), (char *)(wifi_manager_config_sta->sta.password));
-				ESP_LOGI(TAG, "Updated config [%s] [%s]", (char *)(saved_networks[0].ap_ssid), (char *)(saved_networks[0].ap_pwd));
+				ESP_LOGI(TAG, "Updated config [%s] [%s]", (char *)(saved_networks[i].ap_ssid), (char *)(saved_networks[i].ap_pwd));
 				wrote = true;
 				break;
 			}
 		}
-		// 3) saved_networks doesn't contains a conf with current SSID -> add new conf to saved_networks.
+		// Case 2.2
 		if(!wrote){
-			// shift the array, write new conf on first pos
-			memmove(saved_networks + 1, saved_networks, sizeof(network_info) * 10);
+			// shift the array, write new conf on first position
+			memmove(saved_networks + 1, saved_networks, sizeof(network_info) * MAX_SAVED_NETWORK_CONFIGS);
 			strcpy((char *)(saved_networks[0].ap_ssid), (char*)(wifi_manager_config_sta->sta.ssid));
 			strcpy((char*)(saved_networks[0].ap_pwd), (char*)(wifi_manager_config_sta->sta.password));
 			ESP_LOGI(TAG, "Saved new config [%s] [%s]", (char *)(saved_networks[0].ap_ssid), (char *)(saved_networks[0].ap_pwd));
 			wrote = true;
 		}
-		// write changes on storage
+
+		// Finally write changes on storage
 		esp_err = nvs_set_blob(handle, SAVED_NETWORKS, saved_networks, sz);
 		free(saved_networks);
 		if(esp_err != ESP_OK){
@@ -332,8 +332,6 @@ esp_err_t wifi_manager_save_sta_config(){
 }
 
 bool wifi_manager_fetch_wifi_sta_config(){
-	// Potrebbe convenire rinominare la funzione.
-	// FIXME: carica la configurazione, iterando di volta in volta lungo l'array.
 	nvs_handle handle;
 	esp_err_t esp_err;
 	if(nvs_sync_lock( portMAX_DELAY )){
@@ -363,16 +361,18 @@ bool wifi_manager_fetch_wifi_sta_config(){
 
 		// Try to load a configuration in saved_networks[current_config_index]
 		// if config is null => load next
-		int network_config_iterator;
-		for(int i = 1; i < MAX_SAVED_NETWORK_CONFIGS; i++){
-			network_config_iterator = (current_config_index + i) % MAX_SAVED_NETWORK_CONFIGS;
-			ESP_LOGI(TAG, "configuration slot # %d [ssid: %s pswd: %s]", network_config_iterator, saved_networks[network_config_iterator].ap_ssid, saved_networks[network_config_iterator].ap_pwd);
+		// if nothing is found => ssid[0] is equal to '\0' (string terminator)
+		 
+		int iterator;
+		for(int i = 0; i < MAX_SAVED_NETWORK_CONFIGS - 1; i++){
+			iterator = (current_config_index + i + 1) % MAX_SAVED_NETWORK_CONFIGS;
+			ESP_LOGI(TAG, "configuration slot # %d [ssid: %s pswd: %s]", iterator, saved_networks[iterator].ap_ssid, saved_networks[iterator].ap_pwd);
 			
-			if(saved_networks[network_config_iterator].ap_ssid[0] != '\0'){
-				strcpy((char*)(wifi_manager_config_sta->sta.ssid), (char *)(saved_networks[network_config_iterator].ap_ssid));
-				strcpy((char*)(wifi_manager_config_sta->sta.password), (char *)(saved_networks[network_config_iterator].ap_pwd));
+			if(saved_networks[iterator].ap_ssid[0] != '\0'){
+				strcpy((char*)(wifi_manager_config_sta->sta.ssid), (char *)(saved_networks[iterator].ap_ssid));
+				strcpy((char*)(wifi_manager_config_sta->sta.password), (char *)(saved_networks[iterator].ap_pwd));
 				ESP_LOGI(TAG, "FOUND CONFIGURATION IN SAVED_NETWORKS SSID:%s PSWD:%s", wifi_manager_config_sta->sta.ssid, wifi_manager_config_sta->sta.password);
-				current_config_index = network_config_iterator;
+				current_config_index = iterator;
 				break;
 			}
 		}
@@ -924,13 +924,11 @@ esp_netif_t* wifi_manager_get_esp_netif_sta(){
 
 void wifi_manager( void * pvParameters ){
 
-
 	queue_message msg;
 	BaseType_t xStatus;
 	EventBits_t uxBits;
 	ESP_LOGI(TAG, "Setting retries =0");
 	uint8_t	retries = 0;
-
 
 	/* initialize the tcp stack */
 	ESP_ERROR_CHECK(esp_netif_init());
@@ -1046,11 +1044,15 @@ void wifi_manager( void * pvParameters ){
 				break;
 
 			case WM_ORDER_START_WIFI_SCAN:
-				ESP_LOGD(TAG, "MESSAGE: ORDER_START_WIFI_SCAN");
+				ESP_LOGI(TAG, "MESSAGE: ORDER_START_WIFI_SCAN");
 
 				/* if a scan is already in progress this message is simply ignored thanks to the WIFI_MANAGER_SCAN_BIT uxBit */
 				uxBits = xEventGroupGetBits(wifi_manager_event_group);
 				if(! (uxBits & WIFI_MANAGER_SCAN_BIT) ){
+					// Before starting scanning better stop the retry timer, in order to avoid conflicts.
+					if(wifi_manager_retry_timer != NULL){
+						xTimerStop(wifi_manager_retry_timer, (TickType_t)10);
+					}
 					xEventGroupSetBits(wifi_manager_event_group, WIFI_MANAGER_SCAN_BIT);
 					ESP_ERROR_CHECK(esp_wifi_scan_start(&scan_config, false));
 				}
@@ -1175,6 +1177,7 @@ void wifi_manager( void * pvParameters ){
 
 				uxBits = xEventGroupGetBits(wifi_manager_event_group);
 				if( uxBits & WIFI_MANAGER_REQUEST_STA_CONNECT_BIT ){
+					ESP_LOGI(TAG, "QUA1");
 					/* there are no retries when it's a user requested connection by design. This avoids a user hanging too much
 					 * in case they typed a wrong password for instance. Here we simply clear the request bit and move on */
 					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_STA_CONNECT_BIT);
@@ -1186,6 +1189,7 @@ void wifi_manager( void * pvParameters ){
 
 				}
 				else if (uxBits & WIFI_MANAGER_REQUEST_DISCONNECT_BIT){
+					ESP_LOGI(TAG, "QUA2");
 					/* user manually requested a disconnect so the lost connection is a normal event. Clear the flag and restart the AP */
 					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_DISCONNECT_BIT);
 
@@ -1207,6 +1211,7 @@ void wifi_manager( void * pvParameters ){
 					wifi_manager_send_message(WM_ORDER_START_AP, NULL);
 				}
 				else{
+					ESP_LOGI(TAG, "QUA3");
 					/* lost connection ? */
 					if(wifi_manager_lock_json_buffer( portMAX_DELAY )){
 						wifi_manager_generate_ip_info_json( UPDATE_LOST_CONNECTION );
@@ -1215,19 +1220,18 @@ void wifi_manager( void * pvParameters ){
 
 					/* Start the timer that will try to restore the saved config */
 					if(wifi_manager_retry_timer != NULL){
+						ESP_LOGI(TAG, "QUA3 - start timer");
 						xTimerStart( wifi_manager_retry_timer, (TickType_t)0 );
 					}
 
 					/* if it was a restore attempt connection, we clear the bit */
 					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_RESTORE_STA_BIT);
 
-					/* if the AP is not started, we check if we have reached the threshold of failed attempt to start it */
-					if(! (uxBits & WIFI_MANAGER_AP_STARTED_BIT) ){
-
 						/* if the nunber of retries is below the threshold to start the AP, a reconnection attempt is made
-						 * This way we avoid restarting the AP directly in case the connection is mementarily lost */
+						 * This way we avoid restarting the AP directly in case the connection is momentarily lost */
 						if(retries < WIFI_MANAGER_MAX_RETRY_START_AP){
 							retries++;
+							ESP_LOGI(TAG, "QUA3 - retries %d", retries);
 						}
 						else{
 							/* In this scenario the connection was lost beyond repair: kick start the AP! */
@@ -1239,13 +1243,13 @@ void wifi_manager( void * pvParameters ){
 								ESP_LOGI(TAG, "Alternative wifi found. Will attempt to connect.");
 								wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_RESTORE_CONNECTION);
 							}
-							else{
-								/* no wifi saved: start soft AP! This is what should happen during a first run */
-								ESP_LOGI(TAG, "No alternative wifi found. Starting access point.");
+							
+							if(!(uxBits & WIFI_MANAGER_AP_STARTED_BIT)){ // send command only if AP is not running
+								ESP_LOGI(TAG, "Starting access point.");
 								wifi_manager_send_message(WM_ORDER_START_AP, NULL);
 							}
+						
 						}
-					}
 				}
 
 				/* callback */

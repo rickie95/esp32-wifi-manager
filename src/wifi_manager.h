@@ -261,6 +261,15 @@ struct wifi_settings_t{
 };
 extern struct wifi_settings_t wifi_settings;
 
+/**
+ * @brief Structure for saved networks info.
+ * @param ap_ssid holds the SSID of the saved network
+ * @param ap_pwd holds the password of the saved network
+ */
+typedef struct{
+	uint8_t ap_ssid[MAX_SSID_SIZE];
+	uint8_t ap_pwd[MAX_PASSWORD_SIZE];
+}network_info; 
 
 /**
  * @brief Structure used to store one message in the queue.
