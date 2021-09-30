@@ -366,7 +366,7 @@ bool wifi_manager_fetch_wifi_sta_config(){
 		int iterator;
 		for(int i = 0; i < MAX_SAVED_NETWORK_CONFIGS - 1; i++){
 			iterator = (current_config_index + i + 1) % MAX_SAVED_NETWORK_CONFIGS;
-			ESP_LOGI(TAG, "configuration slot # %d [ssid: %s pswd: %s]", iterator, saved_networks[iterator].ap_ssid, saved_networks[iterator].ap_pwd);
+			ESP_LOGD(TAG, "configuration slot # %d [ssid: %s pswd: %s]", iterator, saved_networks[iterator].ap_ssid, saved_networks[iterator].ap_pwd);
 			
 			if(saved_networks[iterator].ap_ssid[0] != '\0'){
 				strcpy((char*)(wifi_manager_config_sta->sta.ssid), (char *)(saved_networks[iterator].ap_ssid));
@@ -1177,7 +1177,6 @@ void wifi_manager( void * pvParameters ){
 
 				uxBits = xEventGroupGetBits(wifi_manager_event_group);
 				if( uxBits & WIFI_MANAGER_REQUEST_STA_CONNECT_BIT ){
-					ESP_LOGI(TAG, "QUA1");
 					/* there are no retries when it's a user requested connection by design. This avoids a user hanging too much
 					 * in case they typed a wrong password for instance. Here we simply clear the request bit and move on */
 					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_STA_CONNECT_BIT);
@@ -1189,7 +1188,6 @@ void wifi_manager( void * pvParameters ){
 
 				}
 				else if (uxBits & WIFI_MANAGER_REQUEST_DISCONNECT_BIT){
-					ESP_LOGI(TAG, "QUA2");
 					/* user manually requested a disconnect so the lost connection is a normal event. Clear the flag and restart the AP */
 					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_DISCONNECT_BIT);
 
@@ -1211,7 +1209,6 @@ void wifi_manager( void * pvParameters ){
 					wifi_manager_send_message(WM_ORDER_START_AP, NULL);
 				}
 				else{
-					ESP_LOGI(TAG, "QUA3");
 					/* lost connection ? */
 					if(wifi_manager_lock_json_buffer( portMAX_DELAY )){
 						wifi_manager_generate_ip_info_json( UPDATE_LOST_CONNECTION );
@@ -1240,10 +1237,10 @@ void wifi_manager( void * pvParameters ){
 							ESP_LOGI(TAG, "Retries espleted, fetching new config and starting AP.");
 							/* try another saved network. Meanwhile start SoftAP */
 							if(wifi_manager_fetch_wifi_sta_config()){
-								ESP_LOGI(TAG, "Alternative wifi found. Will attempt to connect.");
+								ESP_LOGD(TAG, "Alternative wifi found. Will attempt to connect.");
 								wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_RESTORE_CONNECTION);
 							} else if(wifi_manager_retry_timer != NULL){
-								ESP_LOGI(TAG, "Stopping retry timer");
+								ESP_LOGD(TAG, "Stopping retry timer");
 								xTimerStop( wifi_manager_retry_timer, (TickType_t)5 );
 							}
 							
