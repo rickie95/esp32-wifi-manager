@@ -1242,6 +1242,9 @@ void wifi_manager( void * pvParameters ){
 							if(wifi_manager_fetch_wifi_sta_config()){
 								ESP_LOGI(TAG, "Alternative wifi found. Will attempt to connect.");
 								wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_RESTORE_CONNECTION);
+							} else if(wifi_manager_retry_timer != NULL){
+								ESP_LOGI(TAG, "Stopping retry timer");
+								xTimerStop( wifi_manager_retry_timer, (TickType_t)5 );
 							}
 							
 							if(!(uxBits & WIFI_MANAGER_AP_STARTED_BIT)){ // send command only if AP is not running
